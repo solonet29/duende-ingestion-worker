@@ -33,42 +33,49 @@ app.post('/ingest', authMiddleware, async (req, res) => {
   const client = new MongoClient(uri);
 
   try {
-    // Conexión a la base de datos
+    // Conexión a la base de datos y colecciones correctas
     await client.connect();
-    const database = client.db('duende');
-    const artistasCollection = database.collection('artistas');
-    const salasCollection = database.collection('salas_tablos_festivales');
+    const database = client.db('DuendeDB'); // <-- ¡Base de datos corregida!
+    const eventsCollection = database.collection('events'); // <-- ¡Colección corregida!
 
-    // Cargar los datos del archivo JSON usando una ruta corregida
-    const filePath = path.join(__dirname, '..', 'nuevos_eventos.json'); // <-- ¡Línea corregida!
+    // Cargar los datos del archivo JSON
+    const filePath = path.join(__dirname, '..', 'nuevos_eventos.json');
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
-    // Insertar artistas, evitando duplicados
+    let bulkOps = [];
+
+    // Preparar operaciones para artistas
     if (data.artistas && data.artistas.length > 0) {
-      console.log(`Intentando insertar ${data.artistas.length} artistas...`);
-      const bulkOpsArtistas = data.artistas.map(artista => ({
+      console.log(`Preparando ${data.artistas.length} artistas para la ingesta...`);
+      const opsArtistas = data.artistas.map(artista => ({
         updateOne: {
-          filter: { id_artista: artista.id_artista },
-          update: { $set: artista },
+          filter: { id: artista.id_artista }, // Usamos un campo 'id' para la unificación
+          update: { $set: { ...artista, tipo: 'artista' } }, // Añadimos un campo 'tipo'
           upsert: true
         }
       }));
-      await artistasCollection.bulkWrite(bulkOpsArtistas);
-      console.log('Artistas insertados/actualizados con éxito.');
+      bulkOps = bulkOps.concat(opsArtistas);
     }
 
-    // Insertar salas, evitando duplicados
+    // Preparar operaciones para salas
     if (data.salas_tablos_festivales && data.salas_tablos_festivales.length > 0) {
-      console.log(`Intentando insertar ${data.salas_tablos_festivales.length} salas...`);
-      const bulkOpsSalas = data.salas_tablos_festivales.map(sala => ({
+      console.log(`Preparando ${data.salas_tablos_festivales.length} salas para la ingesta...`);
+      const opsSalas = data.salas_tablos_festivales.map(sala => ({
         updateOne: {
-          filter: { id_sala: sala.id_sala },
-          update: { $set: sala },
+          filter: { id: sala.id_sala }, // Usamos un campo 'id' para la unificación
+          update: { $set: { ...sala, tipo: 'sala' } }, // Añadimos un campo 'tipo'
           upsert: true
         }
       }));
-      await salasCollection.bulkWrite(bulkOpsSalas);
-      console.log('Salas/tablos/festivales insertados/actualizados con éxito.');
+      bulkOps = bulkOps.concat(opsSalas);
+    }
+
+    // Ejecutar todas las operaciones en una sola escritura masiva
+    if (bulkOps.length > 0) {
+      await eventsCollection.bulkWrite(bulkOps);
+      console.log('Ingesta en la colección "events" completada con éxito.');
+    } else {
+      console.log('No hay datos para ingestar.');
     }
 
     // Envía una respuesta de éxito
