@@ -1,0 +1,29 @@
+{
+  "artistas": [
+    {
+      "id_artista": "ART999",
+      "nombre": "La Llama Púrpura",
+      "rol": "Artista Experimental",
+      "fuente_descubrimiento": "Test de Sistema"
+    }
+  ],
+  "salas_tablaos_festivales": [
+    {
+      "id_sala": "SALA999",
+      "nombre": "La Cripta Digital",
+      "ciudad": "Madrid",
+      "pais": "España"
+    }
+  ],
+  "eventos": [
+    {
+      "id_evento": "test-evento-despertar-algoritmo-01-12-2025",
+      "titulo": "Concierto de Prueba - El Despertar del Algoritmo",
+      "artistas_participantes": ["ART999"],
+      "id_sala": "SALA999",
+      "fecha": "2025-12-01",
+      "hora": "20:00",
+      "verificado": true
+    }
+  ]
+}
