@@ -1,13 +1,14 @@
 // api/index.js
 
-require('dotenv').config(); // Carga las variables de entorno desde .env
+require('dotenv').config();
 const express = require('express');
-const cors = require('cors'); // Para permitir peticiones desde otros dominios
+const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
+const path = require('path'); // <-- Añade esta línea
 
 const app = express();
-const uri = process.env.MONGODB_URI; // URI de conexión a MongoDB del archivo .env
+const uri = process.env.MONGODB_URI;
 
 // Middleware
 app.use(express.json());
@@ -15,10 +16,10 @@ app.use(cors());
 
 // Middleware para verificar la contraseña
 const authMiddleware = (req, res, next) => {
-  const password = process.env.INGESTA_PASSWORD; // Contraseña del archivo .env
-  const providedPassword = req.headers['x-api-password']; // La contraseña se enviará en el header 'x-api-password'
+  const password = process.env.INGESTA_PASSWORD;
+  const providedPassword = req.headers['x-api-password'];
   if (providedPassword === password && password) {
-    next(); // Si la contraseña es correcta, continúa con la ejecución
+    next();
   } else {
     console.error('Acceso no autorizado. Contraseña incorrecta.');
     res.status(401).json({ error: 'Acceso no autorizado' });
@@ -38,8 +39,9 @@ app.post('/ingest', authMiddleware, async (req, res) => {
     const artistasCollection = database.collection('artistas');
     const salasCollection = database.collection('salas_tablos_festivales');
 
-    // Cargar los datos del archivo JSON
-    const data = JSON.parse(fs.readFileSync('nuevos_eventos.json', 'utf8'));
+    // Cargar los datos del archivo JSON usando una ruta absoluta
+    const filePath = path.join(__dirname, 'nuevos_eventos.json'); // <-- Línea corregida
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8')); // <-- Línea corregida
 
     // Insertar artistas, evitando duplicados
     if (data.artistas && data.artistas.length > 0) {
@@ -81,5 +83,4 @@ app.post('/ingest', authMiddleware, async (req, res) => {
   }
 });
 
-// ¡Importante!: en lugar de app.listen, exportamos la app para que Vercel la use.
 module.exports = app;
