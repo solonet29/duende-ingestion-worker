@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
-const path = require('path'); // <-- Añade esta línea
+const path = require('path');
 
 const app = express();
 const uri = process.env.MONGODB_URI;
@@ -39,9 +39,9 @@ app.post('/ingest', authMiddleware, async (req, res) => {
     const artistasCollection = database.collection('artistas');
     const salasCollection = database.collection('salas_tablos_festivales');
 
-    // Cargar los datos del archivo JSON usando una ruta absoluta
-    const filePath = path.join(__dirname, 'nuevos_eventos.json'); // <-- Línea corregida
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8')); // <-- Línea corregida
+    // Cargar los datos del archivo JSON usando una ruta corregida
+    const filePath = path.join(__dirname, '..', 'nuevos_eventos.json'); // <-- ¡Línea corregida!
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
     // Insertar artistas, evitando duplicados
     if (data.artistas && data.artistas.length > 0) {
