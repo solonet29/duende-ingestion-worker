@@ -1,4 +1,4 @@
-// server.js
+// api/index.js
 
 require('dotenv').config(); // Carga las variables de entorno desde .env
 const express = require('express');
@@ -7,8 +7,6 @@ const { MongoClient } = require('mongodb');
 const fs = require('fs');
 
 const app = express();
-const port = process.env.PORT || 3000;
-const password = process.env.INGESTA_PASSWORD; // Contraseña del archivo .env
 const uri = process.env.MONGODB_URI; // URI de conexión a MongoDB del archivo .env
 
 // Middleware
@@ -17,6 +15,7 @@ app.use(cors());
 
 // Middleware para verificar la contraseña
 const authMiddleware = (req, res, next) => {
+  const password = process.env.INGESTA_PASSWORD; // Contraseña del archivo .env
   const providedPassword = req.headers['x-api-password']; // La contraseña se enviará en el header 'x-api-password'
   if (providedPassword === password && password) {
     next(); // Si la contraseña es correcta, continúa con la ejecución
@@ -82,7 +81,5 @@ app.post('/ingest', authMiddleware, async (req, res) => {
   }
 });
 
-// Inicia el servidor
-app.listen(port, () => {
-  console.log(`Servidor de ingesta escuchando en http://localhost:${port}`);
-});
+// ¡Importante!: en lugar de app.listen, exportamos la app para que Vercel la use.
+module.exports = app;
