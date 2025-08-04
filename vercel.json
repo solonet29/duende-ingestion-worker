@@ -10,5 +10,4 @@
       "includeFiles": ["nuevos_eventos.json"]
     }
   }
-  //forzar vercel despliegue
 }
