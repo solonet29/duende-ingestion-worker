@@ -11,7 +11,7 @@ const MONGO_URI="mongodb+srv://hola:Ang2lyl4l125@duende-cluster.fafouol.mongodb.
 
 // Nombre de tu base de datos y de la colección (tabla) donde guardas los eventos.
 // Asegúrate de que coincidan con los de tu base de datos.
-const DB_NAME = "AFLandDB"; // <-- Cambia esto si tu base de datos se llama diferente
+const DB_NAME = "DuendeDB"; // <-- Cambia esto si tu base de datos se llama diferente
 const COLLECTION_NAME = "eventos"; // <-- Cambia esto si tu colección se llama diferente
 
 // Ruta al archivo JSON con los nuevos eventos que te proporciono.
