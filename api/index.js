@@ -1,5 +1,4 @@
 // api/index.js
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -16,78 +15,95 @@ app.use(cors());
 
 // Middleware para verificar la contraseña
 const authMiddleware = (req, res, next) => {
-  const password = process.env.INGESTA_PASSWORD;
-  const providedPassword = req.headers['x-api-password'];
-  if (providedPassword === password && password) {
-    next();
-  } else {
-    console.error('Acceso no autorizado. Contraseña incorrecta.');
-    res.status(401).json({ error: 'Acceso no autorizado' });
-  }
+    const password = process.env.INGESTA_PASSWORD;
+    const providedPassword = req.headers['x-api-password'];
+    if (providedPassword === password && password) {
+        next();
+    } else {
+        console.error('Acceso no autorizado.');
+        res.status(401).json({ error: 'Acceso no autorizado' });
+    }
 };
 
-// Endpoint principal para la ingesta de eventos
+// Endpoint principal para la ingesta
 app.post('/ingest', authMiddleware, async (req, res) => {
-  console.log('Petición recibida para la ingesta de eventos...');
+    console.log('Petición de ingesta recibida...');
+    const client = new MongoClient(uri);
 
-  const client = new MongoClient(uri);
+    try {
+        await client.connect();
+        const database = client.db('DuendeDB');
+        
+        // --- ¡CAMBIO IMPORTANTE! AHORA TRABAJAREMOS CON 3 COLECCIONES ---
+        const artistsCollection = database.collection('artists');
+        const venuesCollection = database.collection('venues');
+        const eventsCollection = database.collection('events');
 
-  try {
-    // Conexión a la base de datos y colecciones correctas
-    await client.connect();
-    const database = client.db('DuendeDB'); // <-- ¡Base de datos corregida!
-    const eventsCollection = database.collection('events'); // <-- ¡Colección corregida!
+        const filePath = path.join(__dirname, '..', 'nuevos_eventos.json');
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
-    // Cargar los datos del archivo JSON
-    const filePath = path.join(__dirname, '..', 'nuevos_eventos.json');
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        let summary = {
+            artistas: { added: 0, updated: 0 },
+            salas: { added: 0, updated: 0 },
+            eventos: { added: 0, updated: 0 }
+        };
 
-    let bulkOps = [];
-
-    // Preparar operaciones para artistas
-    if (data.artistas && data.artistas.length > 0) {
-      console.log(`Preparando ${data.artistas.length} artistas para la ingesta...`);
-      const opsArtistas = data.artistas.map(artista => ({
-        updateOne: {
-          filter: { id: artista.id_artista }, // Usamos un campo 'id' para la unificación
-          update: { $set: { ...artista, tipo: 'artista' } }, // Añadimos un campo 'tipo'
-          upsert: true
+        // --- 1. PROCESAR ARTISTAS ---
+        if (data.artistas && data.artistas.length > 0) {
+            console.log(`Procesando ${data.artistas.length} artistas...`);
+            for (const artista of data.artistas) {
+                const result = await artistsCollection.updateOne(
+                    { id: artista.id },
+                    { $set: artista },
+                    { upsert: true }
+                );
+                if (result.upsertedCount > 0) summary.artistas.added++;
+                else if (result.matchedCount > 0) summary.artistas.updated++;
+            }
         }
-      }));
-      bulkOps = bulkOps.concat(opsArtistas);
-    }
 
-    // Preparar operaciones para salas
-    if (data.salas_tablos_festivales && data.salas_tablos_festivales.length > 0) {
-      console.log(`Preparando ${data.salas_tablos_festivales.length} salas para la ingesta...`);
-      const opsSalas = data.salas_tablos_festivales.map(sala => ({
-        updateOne: {
-          filter: { id: sala.id_sala }, // Usamos un campo 'id' para la unificación
-          update: { $set: { ...sala, tipo: 'sala' } }, // Añadimos un campo 'tipo'
-          upsert: true
+        // --- 2. PROCESAR SALAS ---
+        if (data.salas && data.salas.length > 0) {
+            console.log(`Procesando ${data.salas.length} salas...`);
+            for (const sala of data.salas) {
+                const result = await venuesCollection.updateOne(
+                    { id: sala.id },
+                    { $set: sala },
+                    { upsert: true }
+                );
+                if (result.upsertedCount > 0) summary.salas.added++;
+                else if (result.matchedCount > 0) summary.salas.updated++;
+            }
         }
-      }));
-      bulkOps = bulkOps.concat(opsSalas);
+
+        // --- 3. PROCESAR EVENTOS (LA LÓGICA QUE FALTABA) ---
+        if (data.eventos && data.eventos.length > 0) {
+            console.log(`Procesando ${data.eventos.length} eventos...`);
+            for (const evento of data.eventos) {
+                const result = await eventsCollection.updateOne(
+                    { id: evento.id },
+                    { $set: evento },
+                    { upsert: true }
+                );
+                if (result.upsertedCount > 0) summary.eventos.added++;
+                else if (result.matchedCount > 0) summary.eventos.updated++;
+            }
+        }
+
+        console.log('Ingesta completada.', summary);
+        res.status(200).json({ message: 'Ingesta completada con éxito.', summary });
+
+    } catch (error) {
+        console.error('Error durante la ingesta:', error);
+        res.status(500).json({ error: 'Error interno del servidor durante la ingesta.' });
+    } finally {
+        await client.close();
     }
+});
 
-    // Ejecutar todas las operaciones en una sola escritura masiva
-    if (bulkOps.length > 0) {
-      await eventsCollection.bulkWrite(bulkOps);
-      console.log('Ingesta en la colección "events" completada con éxito.');
-    } else {
-      console.log('No hay datos para ingestar.');
-    }
-
-    // Envía una respuesta de éxito
-    res.status(200).json({ message: 'Ingesta de eventos completada con éxito.' });
-
-  } catch (error) {
-    console.error('Error durante la ingesta:', error);
-    res.status(500).json({ error: 'Error interno del servidor durante la ingesta.' });
-  } finally {
-    // Asegúrate de cerrar la conexión a la base de datos
-    await client.close();
-  }
+// Ruta de salud para comprobar que el worker está vivo
+app.get('/', (req, res) => {
+    res.status(200).send('Duende Ingestion Worker (v2 Unificado) está vivo.');
 });
 
 module.exports = app;
