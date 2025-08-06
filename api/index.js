@@ -3,9 +3,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
-const fs = require('fs');
-const path = require('path');
-const { runIngestionProcess } = require('../ingestion-logic.js'); // <-- Importamos el cerebro
+// fs y path ya no son necesarios para leer el input
+// const fs = require('fs');
+// const path = require('path');
+const { runIngestionProcess } = require('../ingestion-logic.js');
 
 const app = express();
 const uri = process.env.MONGODB_URI;
@@ -30,14 +31,28 @@ app.post('/ingest', authMiddleware, async (req, res) => {
         await client.connect();
         const database = client.db('DuendeDB');
         
-        // La lógica pesada ya no está aquí
-        const filePath = path.join(__dirname, '..', 'nuevos_eventos.json');
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        // =================================================================
+        // --- CAMBIO IMPORTANTE: DE LEER ARCHIVO A LEER DE LA DB ---
+        // =================================================================
+        console.log("Leyendo eventos desde la colección temporal 'temp_scraped_events'...");
+        const tempCollection = database.collection('temp_scraped_events');
+        const eventosDesdeDB = await tempCollection.find({}).toArray();
 
-        // Simplemente llamamos a nuestro módulo compartido
+        // Creamos el objeto 'data' que nuestra lógica de ingestión espera
+        const data = {
+            eventos: eventosDesdeDB,
+            artistas: [], // El ojeador solo trae eventos, dejamos estos vacíos
+            salas: []
+        };
+        console.log(`Se han encontrado ${data.eventos.length} eventos para procesar.`);
+        // =================================================================
+        // --- FIN DEL CAMBIO ---
+        // =================================================================
+
+        // Ahora, simplemente llamamos a nuestro módulo compartido con los datos de la DB
         const summary = await runIngestionProcess(database, data);
 
-        res.status(200).json({ message: 'Ingesta completada con éxito.', summary });
+        res.status(200).json({ message: 'Ingesta completada con éxito desde la base de datos.', summary });
     } catch (error) {
         console.error('Error durante la ingesta:', error);
         res.status(500).json({ error: 'Error interno del servidor durante la ingesta.' });
