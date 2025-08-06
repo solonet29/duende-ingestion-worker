@@ -5,11 +5,6 @@
       "destination": "/api/index.js"
     }
   ],
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "nuevos_eventos.json"
-    }
-  },
   "crons": [
     {
       "path": "/ingest",
