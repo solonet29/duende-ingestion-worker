@@ -9,5 +9,11 @@
     "api/index.js": {
       "includeFiles": "nuevos_eventos.json"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/ingest",
+      "schedule": "0 10 * * *"
+    }
+  ]
 }
