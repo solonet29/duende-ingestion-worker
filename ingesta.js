@@ -1,13 +1,10 @@
-// ingesta.js - (Para ejecutar a mano con 'node ingesta.js')
-require('dotenv').config(); // <-- Usamos variables de entorno, ¡más seguro!
+// ingesta.js - (Versión corregida para ejecutar a mano)
+require('dotenv').config();
 const { MongoClient } = require('mongodb');
-const fs = require('fs');
-const path = require('path');
-const { runIngestionProcess } = require('./ingestion-logic.js'); // <-- Importamos el mismo cerebro
+const { runIngestionProcess } = require('./ingestion-logic.js');
 
-const MONGO_URI = process.env.MONGODB_URI; // <-- Leemos la URI del .env
+const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = "DuendeDB";
-const JSON_FILE_PATH = path.join(__dirname, 'nuevos_eventos.json');
 
 async function runManualIngestion() {
     console.log("Iniciando script de ingesta manual...");
@@ -22,10 +19,24 @@ async function runManualIngestion() {
         console.log("✅ Conectado con éxito a la base de datos.");
         const database = client.db(DB_NAME);
 
-        console.log(`Leyendo el archivo de nuevos eventos desde: ${JSON_FILE_PATH}`);
-        const data = JSON.parse(fs.readFileSync(JSON_FILE_PATH, 'utf-8'));
+        // =================================================================
+        // --- LA CORRECCIÓN ESTÁ AQUÍ ---
+        // =================================================================
+        // Antes leía de un archivo JSON. Ahora lee de la colección temporal.
+        console.log("Leyendo eventos desde la colección temporal 'temp_scraped_events'...");
+        const tempCollection = database.collection('temp_scraped_events');
+        const eventosDesdeDB = await tempCollection.find({}).toArray();
 
-        // Llamamos a la misma lógica central que usa Vercel
+        // Creamos el objeto 'data' que nuestra lógica de ingestión espera
+        const data = {
+            eventos: eventosDesdeDB,
+            artistas: [], // Dejamos estos vacíos porque el ojeador solo trae eventos
+            salas: []
+        };
+        console.log(`Se han encontrado ${data.eventos.length} eventos para procesar.`);
+        // =================================================================
+
+        // Llamamos a la lógica central con los datos correctos de la DB
         const summary = await runIngestionProcess(database, data);
         
         console.log("----------------------------------------");
