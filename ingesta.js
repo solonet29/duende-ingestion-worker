@@ -3,7 +3,7 @@ require('dotenv').config();
 const { MongoClient } = require('mongodb');
 const { runIngestionProcess } = require('./ingestion-logic.js');
 
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 const DB_NAME = "DuendeDB";
 
 async function runManualIngestion() {
