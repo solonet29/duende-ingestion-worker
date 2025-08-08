@@ -3,9 +3,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
-// fs y path ya no son necesarios para leer el input
-// const fs = require('fs');
-// const path = require('path');
 const { runIngestionProcess } = require('../ingestion-logic.js');
 
 const app = express();
@@ -24,34 +21,26 @@ const authMiddleware = (req, res, next) => {
     }
 };
 
-app.post('/ingest', authMiddleware, async (req, res) => {
+// Lógica de ingesta unificada en una sola función para evitar duplicación
+const ingestionHandler = async (req, res) => {
     console.log('Petición de ingesta recibida...');
     const client = new MongoClient(uri);
     try {
         await client.connect();
         const database = client.db('DuendeDB');
         
-        // =================================================================
-        // --- CAMBIO IMPORTANTE: DE LEER ARCHIVO A LEER DE LA DB ---
-        // =================================================================
         console.log("Leyendo eventos desde la colección temporal 'temp_scraped_events'...");
         const tempCollection = database.collection('temp_scraped_events');
         const eventosDesdeDB = await tempCollection.find({}).toArray();
 
-        // Creamos el objeto 'data' que nuestra lógica de ingestión espera
         const data = {
             eventos: eventosDesdeDB,
-            artistas: [], // El ojeador solo trae eventos, dejamos estos vacíos
+            artistas: [],
             salas: []
         };
         console.log(`Se han encontrado ${data.eventos.length} eventos para procesar.`);
-        // =================================================================
-        // --- FIN DEL CAMBIO ---
-        // =================================================================
 
-        // Ahora, simplemente llamamos a nuestro módulo compartido con los datos de la DB
         const summary = await runIngestionProcess(database, data);
-
         res.status(200).json({ message: 'Ingesta completada con éxito desde la base de datos.', summary });
     } catch (error) {
         console.error('Error durante la ingesta:', error);
@@ -59,7 +48,14 @@ app.post('/ingest', authMiddleware, async (req, res) => {
     } finally {
         await client.close();
     }
-});
+};
+
+// El cron job de Vercel enviará una petición GET.
+// Este handler la capturará y ejecutará la lógica.
+app.get('/ingest', ingestionHandler);
+
+// Este handler POST se mantiene para seguridad, para peticiones externas.
+app.post('/ingest', authMiddleware, ingestionHandler);
 
 app.get('/', (req, res) => {
     res.status(200).send('Duende Ingestion Worker (v2 Unificado) está vivo.');
