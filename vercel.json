@@ -8,7 +8,8 @@
   "crons": [
     {
       "path": "/ingest",
-      "schedule": "0 10 * * *"
+      "schedule": "30 9 * * *",
+      "method": "POST"
     }
   ]
 }
