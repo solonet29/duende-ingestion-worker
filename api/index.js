@@ -11,17 +11,7 @@ const uri = process.env.MONGODB_URI;
 app.use(express.json());
 app.use(cors());
 
-const authMiddleware = (req, res, next) => {
-    const password = process.env.INGESTA_PASSWORD;
-    const providedPassword = req.headers['x-api-password'];
-    if (providedPassword === password && password) {
-        next();
-    } else {
-        res.status(401).json({ error: 'Acceso no autorizado' });
-    }
-};
-
-// Lógica de ingesta unificada en una sola función para evitar duplicación
+// Lógica de ingesta unificada en una sola función
 const ingestionHandler = async (req, res) => {
     console.log('Petición de ingesta recibida...');
     const client = new MongoClient(uri);
@@ -50,11 +40,19 @@ const ingestionHandler = async (req, res) => {
     }
 };
 
-// El cron job de Vercel enviará una petición GET.
-// Este handler la capturará y ejecutará la lógica.
+// Este es el handler GET que Vercel ejecutará con el cron job
 app.get('/ingest', ingestionHandler);
 
-// Este handler POST se mantiene para seguridad, para peticiones externas.
+// Este handler POST se mantiene para peticiones externas con autenticación
+const authMiddleware = (req, res, next) => {
+    const password = process.env.INGESTA_PASSWORD;
+    const providedPassword = req.headers['x-api-password'];
+    if (providedPassword === password && password) {
+        next();
+    } else {
+        res.status(401).json({ error: 'Acceso no autorizado' });
+    }
+};
 app.post('/ingest', authMiddleware, ingestionHandler);
 
 app.get('/', (req, res) => {
