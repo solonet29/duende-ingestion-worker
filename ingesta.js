@@ -1,96 +1,118 @@
-// ingesta.js - (Versión corregida y con registro de analíticas integrado)
-require('dotenv').config();
-const { MongoClient } = require('mongodb');
-// Asumimos que 'runIngestionProcess' está en un archivo separado. Si no, intégralo aquí.
-const { runIngestionProcess } = require('./ingestion-logic.js'); 
 
-const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
-const DB_NAME = "DuendeDB";
+require('dotenv').config();
+const { MongoClient, ObjectId } = require('mongodb');
+const axios = require('axios');
+
+// --- Configuración ---
+// Lee la URI de MongoDB del archivo .env para mayor seguridad
+const uri = process.env.MONGODB_URI;
+const dbName = 'duende-db'; // O el nombre de tu base de datos
+const tempCollectionName = 'temp_events'; // Colección de origen
+const finalCollectionName = 'events'; // Colección de destino
+
+// --- Cliente de MongoDB ---
+const client = new MongoClient(uri);
 
 /**
- * // <-- AÑADIDO: Función auxiliar para registrar la ejecución en la colección de analíticas.
- * Es una función separada para mantener el código principal más limpio.
+ * Geocodifica una dirección usando la API de Nominatim (OpenStreetMap).
+ * @param {string} address - La dirección a geocodificar.
+ * @returns {Promise<object|null>} Un objeto GeoJSON Point o null si falla.
  */
-async function logRun(db, botName, status, durationMs, eventsFound, results, errorMessage = null) {
-    try {
-        const analyticsCollection = db.collection('analytics_runs');
-        const runData = {
-            botName,
-            runTimestamp: new Date(),
-            status,
-            durationMs,
-            eventsFound, // El número de eventos que se intentaron procesar
-            results,
-            errorMessage
-        };
-        await analyticsCollection.insertOne(runData);
-        console.log("📝 Registro de analíticas guardado con éxito.");
-    } catch (logError) {
-        // Si falla el guardado de la analítica, solo lo mostramos en consola
-        // para no interrumpir el flujo principal.
-        console.error("❌ ¡Fallo al guardar el registro de analíticas!:", logError);
+async function getCoordinates(address) {
+  if (!address || typeof address !== 'string' || address.trim() === '') {
+    return null;
+  }
+
+  // Codifica la dirección para que sea segura en una URL
+  const encodedAddress = encodeURIComponent(address);
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&limit=1`;
+
+  try {
+    // Nominatim requiere un User-Agent descriptivo para evitar bloqueos.
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'DuendeFinder/1.0 (https://github.com/YOUR_USERNAME/DuendeFinderProject)'
+      }
+    });
+
+    // Verifica si la API devolvió resultados
+    if (response.data && response.data.length > 0) {
+      const result = response.data[0];
+      const lon = parseFloat(result.lon);
+      const lat = parseFloat(result.lat);
+
+      // Devuelve el objeto en formato GeoJSON
+      return {
+        type: 'Point',
+        coordinates: [lon, lat] // Formato: [longitud, latitud]
+      };
+    } else {
+      return null; // No se encontraron resultados para la dirección
     }
+  } catch (error) {
+    // Maneja errores de red o de la API
+    console.error(`Error al geocodificar la dirección "${address}":`, error.message);
+    return null;
+  }
 }
 
+/**
+ * Procesa los eventos de la colección temporal, los enriquece y los mueve a la colección final.
+ */
+async function processEvents() {
+  console.log('Iniciando proceso de ingesta de eventos...');
+  try {
+    await client.connect();
+    console.log('Conectado a MongoDB.');
 
-async function runManualIngestion() {
-    console.log("Iniciando script de ingesta manual...");
-    
-    const startTime = Date.now(); // <-- AÑADIDO: Capturamos el tiempo de inicio.
-    let client; // <-- MODIFICADO: Definimos client fuera para que sea accesible en 'finally'.
-    let database; // <-- AÑADIDO: Definimos database aquí para que sea accesible en 'catch'.
+    const database = client.db(dbName);
+    const tempCollection = database.collection(tempCollectionName);
+    const finalCollection = database.collection(finalCollectionName);
 
-    if (!MONGO_URI) {
-        console.error("Error: La variable MONGODB_URI no está definida en tu archivo .env");
-        // Registramos el fallo si es posible (aunque sin URI es improbable)
-        const durationMs = Date.now() - startTime;
-        console.log("📝 No se pudo registrar el fallo por falta de URI de la BD.");
-        return;
-    }
-    
-    client = new MongoClient(MONGO_URI);
+    // Asegúrate de que la colección final tenga un índice geoespacial
+    await finalCollection.createIndex({ location: "2dsphere" });
+    console.log('Índice 2dsphere asegurado en la colección final.');
 
-    try {
-        await client.connect();
-        console.log("✅ Conectado con éxito a la base de datos.");
-        database = client.db(DB_NAME); // <-- AÑADIDO: Asignamos valor a la variable.
+    const eventsToProcess = await tempCollection.find({}).toArray();
+    console.log(`Se encontraron ${eventsToProcess.length} eventos para procesar.`);
 
-        console.log("Leyendo eventos desde la colección temporal 'temp_scraped_events'...");
-        const tempCollection = database.collection('temp_scraped_events');
-        const eventosDesdeDB = await tempCollection.find({}).toArray();
+    for (const event of eventsToProcess) {
+      console.log(`Procesando evento: ${event.title}`);
 
-        const data = {
-            eventos: eventosDesdeDB,
-            artistas: [],
-            salas: []
+      const location = await getCoordinates(event.address);
+
+      if (location) {
+        // Enriquecer el documento del evento con la ubicación
+        const enrichedEvent = {
+          ...event,
+          location: location
         };
-        console.log(`Se han encontrado ${data.eventos.length} eventos para procesar.`);
 
-        const summary = await runIngestionProcess(database, data);
+        // Insertar en la colección final
+        await finalCollection.insertOne(enrichedEvent);
+        console.log(`-> Evento "${event.title}" enriquecido y guardado.`);
         
-        console.log("----------------------------------------");
-        console.log("📊 Proceso de ingesta completado.");
-        console.log("Resumen:", summary);
+        // Opcional: Eliminar de la colección temporal después de procesar
+        await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
 
-        // <-- AÑADIDO: Registramos el éxito en la colección de analíticas.
-        const durationMs = Date.now() - startTime;
-        await logRun(database, 'ingestor-manual', 'success', durationMs, data.eventos.length, summary);
-
-    } catch (error) {
-        console.error("❌ Ha ocurrido un error durante el proceso:", error);
-
-        // <-- AÑADIDO: Registramos el fallo en la colección de analíticas.
-        const durationMs = Date.now() - startTime;
-        if (database) { // Solo registramos si llegamos a conectarnos a la BD.
-            await logRun(database, 'ingestor-manual', 'failure', durationMs, 0, {}, error.message);
-        }
-
-    } finally {
-        if (client) { // <-- MODIFICADO: Comprobamos que client se haya inicializado.
-            await client.close();
-            console.log("Conexión con la base de datos cerrada.");
-        }
+      } else {
+        // Si la geocodificación falla, muestra una advertencia y continúa
+        console.warn(`  [AVISO] No se pudo geocodificar la dirección para el evento "${event.title}". Se omitirá.`);
+        // Opcional: podrías moverlo a una colección de "fallidos" en lugar de omitirlo
+        // await database.collection('failed_events').insertOne(event);
+        // await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
+      }
     }
+
+    console.log('Proceso de ingesta completado.');
+
+  } catch (err) {
+    console.error('Ocurrió un error durante el proceso de ingesta:', err);
+  } finally {
+    await client.close();
+    console.log('Conexión a MongoDB cerrada.');
+  }
 }
 
-runManualIngestion();
+// Ejecutar el script
+processEvents();
