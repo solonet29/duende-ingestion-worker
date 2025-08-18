@@ -123,4 +123,4 @@ async function processEvents() {
 }
 
 // Ejecutar el script
-processEvents();Ingesta mejorada para eventos con geocodificación y normalización de artista
+processEvents();
