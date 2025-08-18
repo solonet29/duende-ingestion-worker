@@ -3,7 +3,7 @@ const { MongoClient, ObjectId } = require('mongodb');
 const axios = require('axios');
 
 // --- Configuración ---
-const uri = process.env.MONGODB_URI;
+const uri = process.env.MONGO_URI;
 const dbName = 'duende-db';
 const tempCollectionName = 'temp_events';
 const finalCollectionName = 'events';
