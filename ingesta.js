@@ -20,22 +20,18 @@ async function getCoordinates(address) {
   if (!address || typeof address !== 'string' || address.trim() === '') {
     return null;
   }
-
   const encodedAddress = encodeURIComponent(address);
   const url = `https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&limit=1`;
-
   try {
     const response = await axios.get(url, {
       headers: {
         'User-Agent': 'DuendeFinder/1.0 (https://github.com/YOUR_USERNAME/DuendeFinderProject)'
       }
     });
-
     if (response.data && response.data.length > 0) {
       const result = response.data[0];
       const lon = parseFloat(result.lon);
       const lat = parseFloat(result.lat);
-
       return {
         type: 'Point',
         coordinates: [lon, lat]
@@ -72,7 +68,18 @@ async function processEvents() {
     for (const event of eventsToProcess) {
       console.log(`Procesando evento: ${event.name}`);
 
-      // MODIFICADO: Combinar los campos de lugar para crear una dirección completa
+      // NUEVA LÓGICA: Normalizar el campo 'artist' para evitar [Object] en el frontend
+      let artistName = 'Artista no especificado';
+      if (event.artist && typeof event.artist === 'object' && event.artist.name) {
+        artistName = event.artist.name;
+      } else if (event.artist && typeof event.artist === 'string' && event.artist.trim() !== '') {
+        artistName = event.artist;
+      } else if (event.venue && event.venue.trim() !== '') {
+        // Lógica de respaldo: si no hay artista, usamos el nombre del lugar
+        artistName = event.venue;
+      }
+
+      // Combinar los campos de lugar para la geocodificación
       const fullAddress = [event.venue, event.city, event.country]
         .filter(Boolean)
         .join(', ');
@@ -80,9 +87,10 @@ async function processEvents() {
       const location = await getCoordinates(fullAddress);
 
       if (location) {
-        // Enriquecer el documento del evento con la ubicación
+        // Enriquecer y normalizar el documento del evento
         const enrichedEvent = {
           ...event,
+          artist: artistName, // Asignamos el nombre de artista ya normalizado
           location: location,
           contentStatus: 'pending' // Añadir el estado para el bot de contenido
         };
@@ -98,7 +106,6 @@ async function processEvents() {
 
         // Eliminar de la colección temporal después de procesar
         await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
-
       } else {
         console.warn(`[AVISO] No se pudo geocodificar la dirección para el evento "${event.name}". Se moverá a la colección de fallidos.`);
         await database.collection('failed_ingestion_events').insertOne(event);
@@ -107,7 +114,6 @@ async function processEvents() {
     }
 
     console.log('Proceso de ingesta completado.');
-
   } catch (err) {
     console.error('Ocurrió un error durante el proceso de ingesta:', err);
   } finally {
@@ -117,4 +123,4 @@ async function processEvents() {
 }
 
 // Ejecutar el script
-processEvents();
+processEvents();Ingesta mejorada para eventos con geocodificación y normalización de artista
