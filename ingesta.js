@@ -14,7 +14,7 @@ const axios = require('axios'); // Usado para futuras extensiones de geocodifica
 
 // Variables de entorno para la conexión a la base de datos
 const uri = process.env.MONGO_URI;
-const dbName = 'duende-db';
+const dbName = 'DuendeDB';
 
 // Nombres de las colecciones. Asegúrate de que coincidan con tu base de datos.
 const tempCollectionName = 'temp_scraped_events';
