@@ -1,122 +1,118 @@
+// ======================================================================
+// SCRIPT: ingesta.js
+// OBJETIVO: Este script procesa eventos desde una colección temporal,
+//           sanea sus datos, evita duplicados y los inserta en la
+//           colección principal de eventos.
+// Plataforma: Vercel Cron Jobs.
+// ======================================================================
+
+// --- Dependencias y Configuración ---
+// ----------------------------------------------------------------------
 require('dotenv').config();
 const { MongoClient, ObjectId } = require('mongodb');
-const axios = require('axios');
+const axios = require('axios'); // Usado para futuras extensiones de geocodificación, aunque no en este flujo de ingesta.
 
-// --- Configuración ---
+// Variables de entorno para la conexión a la base de datos
 const uri = process.env.MONGO_URI;
 const dbName = 'duende-db';
-const tempCollectionName = 'temp_events';
+
+// Nombres de las colecciones. Asegúrate de que coincidan con tu base de datos.
+const tempCollectionName = 'temp_scraped_events';
 const finalCollectionName = 'events';
 
-// --- Cliente de MongoDB ---
+// Cliente de MongoDB para la conexión
 const client = new MongoClient(uri);
 
-/**
- * Geocodifica una dirección usando la API de Nominatim (OpenStreetMap).
- * @param {string} address - La dirección a geocodificar.
- * @returns {Promise<object|null>} Un objeto GeoJSON Point o null si falla.
- */
-async function getCoordinates(address) {
-  if (!address || typeof address !== 'string' || address.trim() === '') {
-    return null;
-  }
-  const encodedAddress = encodeURIComponent(address);
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&limit=1`;
-  try {
-    const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'DuendeFinder/1.0 (https://github.com/YOUR_USERNAME/DuendeFinderProject)'
-      }
-    });
-    if (response.data && response.data.length > 0) {
-      const result = response.data[0];
-      const lon = parseFloat(result.lon);
-      const lat = parseFloat(result.lat);
-      return {
-        type: 'Point',
-        coordinates: [lon, lat]
-      };
-    } else {
-      return null;
-    }
-  } catch (error) {
-    console.error(`Error al geocodificar la dirección "${address}":`, error.message);
-    return null;
-  }
-}
-
-/**
- * Procesa los eventos de la colección temporal, los enriquece y los mueve a la colección final.
- */
+// ======================================================================
+// FUNCIÓN PRINCIPAL: processEvents()
+// Orquestador del flujo de ingesta.
+// ======================================================================
 async function processEvents() {
   console.log('Iniciando proceso de ingesta de eventos...');
+
+  // Objeto para llevar un registro de las operaciones
+  const summary = {
+    eventos: { added: 0, duplicates: 0, failed: 0 }
+  };
+
   try {
+    // --- Conexión y acceso a las colecciones ---
     await client.connect();
     console.log('Conectado a MongoDB.');
-
     const database = client.db(dbName);
     const tempCollection = database.collection(tempCollectionName);
     const finalCollection = database.collection(finalCollectionName);
 
-    // Si tu Ingestor crea el índice, asegúrate de que esté correcto
-    await finalCollection.createIndex({ location: "2dsphere" });
-    console.log('Índice 2dsphere asegurado en la colección final.');
-
+    // --- Lectura de los eventos a procesar ---
+    // Se leen todos los documentos de la colección temporal.
     const eventsToProcess = await tempCollection.find({}).toArray();
     console.log(`Se encontraron ${eventsToProcess.length} eventos para procesar.`);
 
+    // --- Bucle de procesamiento de eventos ---
+    // Iteramos sobre cada evento encontrado para sanearlo y guardarlo.
     for (const event of eventsToProcess) {
       console.log(`Procesando evento: ${event.name}`);
 
-      // NUEVA LÓGICA: Normalizar el campo 'artist' para evitar [Object] en el frontend
-      let artistName = 'Artista no especificado';
-      if (event.artist && typeof event.artist === 'object' && event.artist.name) {
-        artistName = event.artist.name;
-      } else if (event.artist && typeof event.artist === 'string' && event.artist.trim() !== '') {
-        artistName = event.artist;
-      } else if (event.venue && event.venue.trim() !== '') {
-        // Lógica de respaldo: si no hay artista, usamos el nombre del lugar
-        artistName = event.venue;
+      // Paso 1: Saneamiento de Datos 🧹
+      // Creamos una copia del objeto para trabajar con él.
+      const eventData = { ...event };
+
+      // Verificamos y asignamos valores por defecto si los campos están vacíos o nulos.
+      if (!eventData.artist || eventData.artist.length === 0) {
+        eventData.artist = 'Artista no especificado';
+      }
+      if (!eventData.date || eventData.date.length === 0) {
+        eventData.date = 'Fecha no disponible';
+      }
+      if (!eventData.description || eventData.description.length === 0) {
+        eventData.description = 'Más información en la web del evento.';
       }
 
-      // Combinar los campos de lugar para la geocodificación
-      const fullAddress = [event.venue, event.city, event.country]
-        .filter(Boolean)
-        .join(', ');
-
-      const location = await getCoordinates(fullAddress);
-
-      if (location) {
-        // Enriquecer y normalizar el documento del evento
-        const enrichedEvent = {
-          ...event,
-          artist: artistName, // Asignamos el nombre de artista ya normalizado
-          location: location,
-          contentStatus: 'pending' // Añadir el estado para el bot de contenido
-        };
-
-        // Insertar en la colección final y evitar duplicados
-        const exists = await finalCollection.findOne({ id: enrichedEvent.id });
-        if (!exists) {
-          await finalCollection.insertOne(enrichedEvent);
-          console.log(`-> Evento "${event.name}" enriquecido y guardado.`);
-        } else {
-          console.log(`-> Evento "${event.name}" ya existe. Se omite.`);
-        }
-
-        // Eliminar de la colección temporal después de procesar
+      // Verificamos un campo clave para el control de errores.
+      if (!eventData.sourceUrl) {
+        console.warn(`⚠️ Evento descartado por falta de 'sourceUrl':`, eventData.name);
         await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
+        summary.eventos.failed++;
+        continue; // Pasamos al siguiente evento del bucle.
+      }
+
+      // Paso 2: Deduplicación por sourceUrl 💾
+      // Buscamos si ya existe un evento con la misma URL en la colección final.
+      const existingEvent = await finalCollection.findOne({
+        sourceUrl: eventData.sourceUrl
+      });
+
+      if (existingEvent) {
+        console.log(`⏭️ Evento duplicado de '${eventData.name}' no se inserta.`);
+        summary.eventos.duplicates++;
       } else {
-        console.warn(`[AVISO] No se pudo geocodificar la dirección para el evento "${event.name}". Se moverá a la colección de fallidos.`);
-        await database.collection('failed_ingestion_events').insertOne(event);
-        await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
+        // Si no existe, lo insertamos como un nuevo evento.
+        try {
+          const insertResult = await finalCollection.insertOne({
+            ...eventData,
+            contentStatus: 'pending' // Etiquetamos para el bot de contenidos.
+          });
+          console.log(`✅ Nuevo evento insertado con ID: ${insertResult.insertedId}`);
+          summary.eventos.added++;
+        } catch (error) {
+          // Manejo de errores de inserción
+          console.error('Error al insertar el evento:', error);
+          summary.eventos.failed++;
+        }
       }
+
+      // Paso 3: Limpieza de la colección temporal 🧹
+      // Eliminamos el evento de la colección temporal, independientemente de si se insertó o no.
+      await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
     }
 
-    console.log('Proceso de ingesta completado.');
+    console.log('Proceso de ingesta completado. Resumen:', summary);
+
   } catch (err) {
+    // Manejo de errores de conexión o del proceso general
     console.error('Ocurrió un error durante el proceso de ingesta:', err);
   } finally {
+    // Aseguramos que la conexión a la base de datos siempre se cierre.
     await client.close();
     console.log('Conexión a MongoDB cerrada.');
   }
