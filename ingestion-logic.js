@@ -1,19 +1,18 @@
-// ingestion-logic.js (Versión con deduplicación mejorada por artista y fecha)
+// ingestion-logic.js (Versión con deduplicación mejorada y saneamiento)
 const { ObjectId } = require('mongodb');
 
 async function runIngestionProcess(database, data) {
     const artistsCollection = database.collection('artists');
     const venuesCollection = database.collection('venues');
     const eventsCollection = database.collection('events');
+    const tempCollection = database.collection('temp_scraped_events'); // Añadimos la colección temporal
 
     let summary = {
         artistas: { added: 0, updated: 0 },
         salas: { added: 0, updated: 0 },
-        eventos: { added: 0, updated: 0, duplicates: 0 } // <-- AÑADIDO: Contador para duplicados
+        eventos: { added: 0, updated: 0, duplicates: 0, discarded: 0, failed: 0 } // <-- Actualizamos el resumen
     };
 
-    // La lógica para artistas y salas se mantiene, ya que no son eventos que puedan duplicarse
-    // de la misma forma y el upsert es la estrategia correcta para ellos.
     const listaArtistas = data.artistas || data.artists || [];
     if (listaArtistas.length > 0) {
         for (const artista of listaArtistas) {
@@ -41,33 +40,52 @@ async function runIngestionProcess(database, data) {
         for (const evento of listaEventos) {
             const { _id, ...eventData } = evento;
 
-            // <-- CAMBIO CLAVE: Usamos artista y fecha para la deduplicación
-            // Es la forma más fiable de identificar un evento único.
-            // Primero, validamos que los campos existen.
-            if (!eventData.artist || !eventData.date) {
-                console.log(`⚠️ Evento descartado por falta de datos clave (artista o fecha):`, eventData);
+            // --- PASO 1: Saneamiento de Datos ---
+            // Asignamos valores por defecto a los campos nulos o vacíos.
+            if (!eventData.artist || eventData.artist.length === 0) {
+                eventData.artist = 'Artista no especificado';
+            }
+            if (!eventData.date || eventData.date.length === 0) {
+                eventData.date = 'Fecha no disponible';
+            }
+            if (!eventData.description || eventData.description.length === 0) {
+                eventData.description = 'Más información en la web del evento.';
+            }
+
+            // <-- IMPORTANTE: Ahora el 'continue' solo ocurre si no hay un identificador
+            // Esto es crucial para no perder la referencia original.
+            if (!eventData.sourceUrl) {
+                console.log(`⚠️ Evento descartado por falta de 'sourceUrl':`, eventData);
+                summary.eventos.discarded++;
                 continue;
             }
 
-            // Buscamos si ya existe un evento con el mismo artista y fecha
+            // --- PASO 2: Deduplicación ---
+            // La lógica de deduplicación se mantiene, pero ahora los campos ya están saneados.
             const existingEvent = await eventsCollection.findOne({
-                artist: eventData.artist,
-                date: eventData.date
+                sourceUrl: eventData.sourceUrl // <-- Cambio clave: Usamos la URL de origen como identificador único
             });
 
             if (existingEvent) {
-                // Si existe un evento con el mismo artista y fecha, lo consideramos duplicado
-                console.log(`⏭️ Evento duplicado de '${eventData.artist}' en '${eventData.date}' no se inserta.`);
+                console.log(`⏭️ Evento duplicado de '${eventData.sourceUrl}' no se inserta.`);
                 summary.eventos.duplicates++;
             } else {
-                // Si no existe, lo insertamos como un nuevo evento.
-                const insertResult = await eventsCollection.insertOne({
-                    ...eventData,
-                    contentStatus: 'pending' // <-- LA ETIQUETA PARA EL GEM DE CONTENIDOS
-                });
-                console.log(`✅ Nuevo evento insertado con ID: ${insertResult.insertedId}`);
-                summary.eventos.added++;
+                try {
+                    // --- PASO 3: Inserción y Limpieza ---
+                    const insertResult = await eventsCollection.insertOne({
+                        ...eventData,
+                        contentStatus: 'pending'
+                    });
+                    console.log(`✅ Nuevo evento insertado con ID: ${insertResult.insertedId}`);
+                    summary.eventos.added++;
+                } catch (error) {
+                    console.error('Error al insertar el evento:', error);
+                    summary.eventos.failed++;
+                }
             }
+
+            // Independientemente de si se insertó o se descartó por duplicado, lo eliminamos de la colección temporal
+            await tempCollection.deleteOne({ _id: new ObjectId(evento._id) });
         }
     }
 
