@@ -51,7 +51,7 @@ function sanitizeEvent(event) {
 
 /**
  * Busca en la colección final qué URLs de un listado ya existen.
- * @param {string[]} urls - Un array de sourceUrl a verificar.
+ * @param {string[]} urls - Un array de referenceURL a verificar.
  * @param {Db.Collection} finalCollection - La colección donde buscar.
  * @returns {Promise<Set<string>>} Un Set con las URLs que ya existen.
  */
@@ -60,10 +60,10 @@ async function findExistingUrls(urls, finalCollection) {
     return new Set();
   }
   const existingEvents = await finalCollection.find({
-    sourceUrl: { $in: urls }
-  }).project({ sourceUrl: 1 }).toArray();
+    referenceURL: { $in: urls } // CORREGIDO
+  }).project({ referenceURL: 1 }).toArray(); // CORREGIDO
 
-  return new Set(existingEvents.map(e => e.sourceUrl));
+  return new Set(existingEvents.map(e => e.referenceURL)); // CORREGIDO
 }
 
 // ======================================================================
@@ -97,30 +97,27 @@ async function processEvents() {
     console.log(`🔎 Se encontraron ${summary.processed} eventos para procesar.`);
 
     // 2. Optimización: Buscar todos los duplicados en una sola consulta
-    const sourceUrlsToCheck = eventsToProcess
-      .map(event => event.sourceUrl)
-      .filter(Boolean); // Filtra URLs nulas o indefinidas
-    const existingUrls = await findExistingUrls(sourceUrlsToCheck, finalCollection);
+    const urlsToCheck = eventsToProcess
+      .map(event => event.referenceURL) // CORREGIDO
+      .filter(Boolean);
+    const existingUrls = await findExistingUrls(urlsToCheck, finalCollection);
     console.log(`✅ Comprobación de duplicados realizada. ${existingUrls.size} URLs ya existen.`);
 
     // 3. Procesar cada evento individualmente
     for (const event of eventsToProcess) {
-      // Paso 3.1: Saneamiento y validación de datos
       const sanitizedEvent = sanitizeEvent(event);
 
-      if (!sanitizedEvent.sourceUrl) {
-        console.warn(`⚠️ Evento descartado por falta de 'sourceUrl':`, sanitizedEvent.name);
+      if (!sanitizedEvent.referenceURL) { // CORREGIDO
+        console.warn(`⚠️ Evento descartado por falta de 'referenceURL':`, sanitizedEvent.name); // CORREGIDO
         summary.invalid++;
-      } else if (existingUrls.has(sanitizedEvent.sourceUrl)) {
-        // Paso 3.2: Descartar duplicados basándonos en la consulta previa
-        console.log(`⏭️  Evento duplicado (misma sourceUrl) descartado: '${sanitizedEvent.name}'`);
+      } else if (existingUrls.has(sanitizedEvent.referenceURL)) { // CORREGIDO
+        console.log(`⏭️  Evento duplicado (misma referenceURL) descartado: '${sanitizedEvent.name}'`); // CORREGIDO
         summary.duplicates++;
       } else {
-        // Paso 3.3: Insertar evento válido y no duplicado
         try {
           const insertResult = await finalCollection.insertOne({
             ...sanitizedEvent,
-            contentStatus: CONTENT_STATUS_PENDING // Etiquetamos para el bot de contenidos
+            contentStatus: CONTENT_STATUS_PENDING
           });
           console.log(`✨ Nuevo evento insertado con ID: ${insertResult.insertedId}`);
           summary.added++;
@@ -130,7 +127,6 @@ async function processEvents() {
         }
       }
 
-      // Paso 3.4: Limpieza final del evento en la colección temporal
       await tempCollection.deleteOne({ _id: new ObjectId(event._id) });
     }
 
