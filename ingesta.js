@@ -10,10 +10,13 @@
 // ----------------------------------------------------------------------
 require('dotenv').config();
 const { MongoClient, ObjectId } = require('mongodb');
+const { Client } = require("@googlemaps/google-maps-services-js");
+const googleMapsClient = new Client({});
 
 // Variables de entorno
 const uri = process.env.MONGO_URI;
 const dbName = 'DuendeDB';
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 // Nombres de las colecciones para evitar errores de tipeo
 const TEMP_COLLECTION_NAME = 'temp_scraped_events';
@@ -60,10 +63,35 @@ async function findExistingUrls(urls, finalCollection) {
     return new Set();
   }
   const existingEvents = await finalCollection.find({
-    referenceURL: { $in: urls } // CORREGIDO
-  }).project({ referenceURL: 1 }).toArray(); // CORREGIDO
+    referenceURL: { $in: urls }
+  }).project({ referenceURL: 1 }).toArray();
 
-  return new Set(existingEvents.map(e => e.referenceURL)); // CORREGIDO
+  return new Set(existingEvents.map(e => e.referenceURL));
+}
+
+/**
+ * Geocodifica una dirección usando la API de Google Maps.
+ * @param {string} address - La dirección a geocodificar.
+ * @returns {Promise<number[] | null>} Un array con [longitud, latitud] o null si falla.
+ */
+async function geocodeAddress(address) {
+  try {
+    const response = await googleMapsClient.geocode({
+      params: {
+        address: address,
+        key: GOOGLE_MAPS_API_KEY,
+      },
+    });
+    const { results } = response.data;
+    if (results.length > 0) {
+      const location = results[0].geometry.location;
+      // MongoDB usa [longitud, latitud]
+      return [location.lng, location.lat];
+    }
+  } catch (error) {
+    console.error(`❌ Error al geocodificar la dirección '${address}':`, error.response?.data?.error_message || error.message);
+  }
+  return null;
 }
 
 // ======================================================================
@@ -98,7 +126,7 @@ async function processEvents() {
 
     // 2. Optimización: Buscar todos los duplicados en una sola consulta
     const urlsToCheck = eventsToProcess
-      .map(event => event.referenceURL) // CORREGIDO
+      .map(event => event.referenceURL)
       .filter(Boolean);
     const existingUrls = await findExistingUrls(urlsToCheck, finalCollection);
     console.log(`✅ Comprobación de duplicados realizada. ${existingUrls.size} URLs ya existen.`);
@@ -107,14 +135,32 @@ async function processEvents() {
     for (const event of eventsToProcess) {
       const sanitizedEvent = sanitizeEvent(event);
 
-      if (!sanitizedEvent.referenceURL) { // CORREGIDO
-        console.warn(`⚠️ Evento descartado por falta de 'referenceURL':`, sanitizedEvent.name); // CORREGIDO
+      if (!sanitizedEvent.referenceURL) {
+        console.warn(`⚠️ Evento descartado por falta de 'referenceURL':`, sanitizedEvent.name);
         summary.invalid++;
-      } else if (existingUrls.has(sanitizedEvent.referenceURL)) { // CORREGIDO
-        console.log(`⏭️  Evento duplicado (misma referenceURL) descartado: '${sanitizedEvent.name}'`); // CORREGIDO
+      } else if (existingUrls.has(sanitizedEvent.referenceURL)) {
+        console.log(`⏭️  Evento duplicado (misma referenceURL) descartado: '${sanitizedEvent.name}'`);
         summary.duplicates++;
       } else {
         try {
+          // --- Lógica de Saneamiento de Coordenadas (NUEVO) ---
+          if (sanitizedEvent.location && sanitizedEvent.location.coordinates && sanitizedEvent.location.coordinates.length === 0 && sanitizedEvent.address) {
+            console.log(`🌍 Geocodificando dirección para el evento: '${sanitizedEvent.name}'...`);
+            const coordinates = await geocodeAddress(sanitizedEvent.address);
+            if (coordinates) {
+              sanitizedEvent.location.coordinates = coordinates;
+              console.log(`✨ Coordenadas encontradas: [${coordinates}]`);
+            } else {
+              // Si la geocodificación falla, eliminamos el campo para evitar el error de MongoDB
+              delete sanitizedEvent.location;
+              console.warn(`⚠️ No se pudieron encontrar coordenadas, descartando el campo 'location'.`);
+            }
+          } else if (sanitizedEvent.location && (!sanitizedEvent.location.coordinates || sanitizedEvent.location.coordinates.length === 0)) {
+            // Este caso cubre si no hay dirección para geocodificar.
+            delete sanitizedEvent.location;
+            console.warn(`⚠️ Datos de ubicación incompletos, descartando el campo 'location'.`);
+          }
+
           const insertResult = await finalCollection.insertOne({
             ...sanitizedEvent,
             contentStatus: CONTENT_STATUS_PENDING
