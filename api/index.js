@@ -1,62 +1,22 @@
 // api/index.js
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const { MongoClient } = require('mongodb');
-const { runIngestionProcess } = require('../ingestion-logic.js');
+// Este archivo es el punto de entrada para el Cron Job de Vercel.
 
-const app = express();
-const uri = process.env.MONGODB_URI;
+// Importamos la lógica de ingesta real desde el script consolidado.
+const { processEvents } = require('../ingesta.js');
 
-app.use(express.json());
-app.use(cors());
-
-// Lógica de ingesta unificada en una sola función
-const ingestionHandler = async (req, res) => {
-    console.log('Petición de ingesta recibida...');
-    const client = new MongoClient(uri);
-    try {
-        await client.connect();
-        const database = client.db('DuendeDB');
-        
-        console.log("Leyendo eventos desde la colección temporal 'temp_scraped_events'...");
-        const tempCollection = database.collection('temp_scraped_events');
-        const eventosDesdeDB = await tempCollection.find({}).toArray();
-
-        const data = {
-            eventos: eventosDesdeDB,
-            artistas: [],
-            salas: []
-        };
-        console.log(`Se han encontrado ${data.eventos.length} eventos para procesar.`);
-
-        const summary = await runIngestionProcess(database, data);
-        res.status(200).json({ message: 'Ingesta completada con éxito desde la base de datos.', summary });
-    } catch (error) {
-        console.error('Error durante la ingesta:', error);
-        res.status(500).json({ error: 'Error interno del servidor durante la ingesta.' });
-    } finally {
-        await client.close();
-    }
+// Vercel espera una función handler que tome (request, response).
+module.exports = async (request, response) => {
+  try {
+    console.log('CRON JOB: Iniciando la ejecución de processEvents...');
+    // Ejecutamos la función principal de ingesta y esperamos a que termine.
+    await processEvents();
+    console.log('CRON JOB: La ejecución de processEvents ha finalizado con éxito.');
+    // Enviamos una respuesta exitosa.
+    response.status(200).send('Ingestión completada con éxito.');
+  } catch (error) {
+    // Si algo sale mal dentro de processEvents, lo capturamos aquí.
+    console.error('CRON JOB: Ha ocurrido un error fatal durante la ejecución.', error);
+    // Enviamos una respuesta de error para que Vercel sepa que el job falló.
+    response.status(500).send('Error en el proceso de ingestión.');
+  }
 };
-
-// Este es el handler GET que Vercel ejecutará con el cron job
-app.get('/ingest', ingestionHandler);
-
-// Este handler POST se mantiene para peticiones externas con autenticación
-const authMiddleware = (req, res, next) => {
-    const password = process.env.INGESTA_PASSWORD;
-    const providedPassword = req.headers['x-api-password'];
-    if (providedPassword === password && password) {
-        next();
-    } else {
-        res.status(401).json({ error: 'Acceso no autorizado' });
-    }
-};
-app.post('/ingest', authMiddleware, ingestionHandler);
-
-app.get('/', (req, res) => {
-    res.status(200).send('Duende Ingestion Worker (v2 Unificado) está vivo.');
-});
-
-module.exports = app;

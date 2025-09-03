@@ -191,5 +191,5 @@ async function processEvents() {
   console.log('-----------------------------\n');
 }
 
-// Ejecutar el script
-processEvents();
+// Exportar la función para que pueda ser llamada desde otros módulos, como el endpoint de la API.
+module.exports = { processEvents };
