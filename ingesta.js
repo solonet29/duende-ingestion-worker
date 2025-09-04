@@ -1,8 +1,7 @@
 // ======================================================================
-// SCRIPT: ingesta.js
-// OBJETIVO: Procesar eventos desde una colección temporal, sanear
-//           sus datos, evitar duplicados y transferirlos a la
-//           colección principal.
+// SCRIPT: ingesta.js (Versión 2.0 con Fallback a Ciudad)
+// OBJETIVO: Procesar eventos, aplicando fallback de geocodificación
+//           para maximizar la calidad del dato en el momento de entrada.
 // Plataforma: Vercel Cron Jobs.
 // ======================================================================
 
@@ -75,11 +74,13 @@ async function findExistingUrls(urls, finalCollection) {
  * @returns {Promise<number[] | null>} Un array con [longitud, latitud] o null si falla.
  */
 async function geocodeAddress(address) {
+  if (!address) return null;
   try {
     const response = await googleMapsClient.geocode({
       params: {
         address: address,
         key: GOOGLE_MAPS_API_KEY,
+        components: 'country:ES' // Prioriza resultados en España
       },
     });
     const { results } = response.data;
@@ -94,12 +95,13 @@ async function geocodeAddress(address) {
   return null;
 }
 
+
 // ======================================================================
 // FUNCIÓN PRINCIPAL: processEvents()
 // Orquestador del flujo de ingesta.
 // ======================================================================
 async function processEvents() {
-  console.log('🚀 Iniciando proceso de ingesta de eventos...');
+  console.log('🚀 Iniciando proceso de ingesta de eventos (v2.0 con Fallback)...');
   const summary = {
     processed: 0,
     added: 0,
@@ -143,23 +145,42 @@ async function processEvents() {
         summary.duplicates++;
       } else {
         try {
-          // --- Lógica de Saneamiento de Coordenadas (NUEVO) ---
-          if (sanitizedEvent.location && sanitizedEvent.location.coordinates && sanitizedEvent.location.coordinates.length === 0 && sanitizedEvent.address) {
-            console.log(`🌍 Geocodificando dirección para el evento: '${sanitizedEvent.name}'...`);
-            const coordinates = await geocodeAddress(sanitizedEvent.address);
-            if (coordinates) {
-              sanitizedEvent.location.coordinates = coordinates;
-              console.log(`✨ Coordenadas encontradas: [${coordinates}]`);
-            } else {
-              // Si la geocodificación falla, eliminamos el campo para evitar el error de MongoDB
-              delete sanitizedEvent.location;
-              console.warn(`⚠️ No se pudieron encontrar coordenadas, descartando el campo 'location'.`);
-            }
-          } else if (sanitizedEvent.location && (!sanitizedEvent.location.coordinates || sanitizedEvent.location.coordinates.length === 0)) {
-            // Este caso cubre si no hay dirección para geocodificar.
-            delete sanitizedEvent.location;
-            console.warn(`⚠️ Datos de ubicación incompletos, descartando el campo 'location'.`);
+          // ============================================================
+          // Bloque de Geocodificación con Fallback
+          // ============================================================
+          let coordinates = null;
+          let isApproximate = false;
+
+          // 1. Plan A: Intentar con la dirección exacta
+          if (sanitizedEvent.address) {
+            console.log(`   📍 Geocodificando dirección para '${sanitizedEvent.name}': ${sanitizedEvent.address}`);
+            coordinates = await geocodeAddress(sanitizedEvent.address);
           }
+
+          // 2. Plan B: Si falla, intentar con la ciudad
+          if (!coordinates && sanitizedEvent.city) {
+            console.log(`   🏙️  Fallback a ciudad para '${sanitizedEvent.name}': ${sanitizedEvent.city}`);
+            coordinates = await geocodeAddress(`${sanitizedEvent.city}, España`);
+            if (coordinates) {
+              isApproximate = true;
+            }
+          }
+
+          // 3. Asignar o eliminar el campo 'location'
+          if (coordinates) {
+            sanitizedEvent.location = {
+              type: 'Point',
+              coordinates: coordinates,
+              isApproximate: isApproximate
+            };
+            const type = isApproximate ? 'Aproximada' : 'Exacta';
+            console.log(`   ✨ Ubicación ${type} encontrada.`);
+          } else if (sanitizedEvent.location) {
+            // Si no se encontró nada y el campo existía por alguna razón, lo eliminamos
+            delete sanitizedEvent.location;
+            console.log(`   ⚠️ No se pudo geocodificar. Descartando campo 'location'.`);
+          }
+          // ============================================================
 
           const insertResult = await finalCollection.insertOne({
             ...sanitizedEvent,
