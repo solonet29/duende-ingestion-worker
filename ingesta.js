@@ -193,3 +193,8 @@ async function processEvents() {
 
 // Exportar la función para que pueda ser llamada desde otros módulos, como el endpoint de la API.
 module.exports = { processEvents };
+
+// Iniciar el proceso si el script se ejecuta directamente
+if (require.main === module) {
+  processEvents();
+}
